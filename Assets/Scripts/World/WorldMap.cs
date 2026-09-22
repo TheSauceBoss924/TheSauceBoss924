@@ -41,6 +41,7 @@ public class WorldMap : ScriptableObject
     private Dictionary<string, HashSet<string>> _neighborsById;
     private Dictionary<BiomeType, BiomeProfile> _biomesByType;
     private HashSet<string> _allScenes;
+    private List<string> _roomIds;
 
     private static readonly HashSet<string> NoNeighbors = new();
 
@@ -67,6 +68,16 @@ public class WorldMap : ScriptableObject
         return _biomesByType.TryGetValue(biome, out BiomeProfile profile) ? profile : null;
     }
 
+    // Every room id, in the order they're listed in the inspector. Used by the dev mode room teleport.
+    public IReadOnlyList<string> RoomIds
+    {
+        get
+        {
+            EnsureBuilt();
+            return _roomIds;
+        }
+    }
+
     // Every room scene and biome background scene in the map. The WorldStreamer only ever unloads these.
     public bool ContainsScene(string sceneName)
     {
@@ -82,13 +93,17 @@ public class WorldMap : ScriptableObject
         _neighborsById = new Dictionary<string, HashSet<string>>();
         _biomesByType = new Dictionary<BiomeType, BiomeProfile>();
         _allScenes = new HashSet<string>();
+        _roomIds = new List<string>();
 
         foreach (RoomEntry room in rooms)
         {
             if (room == null || string.IsNullOrEmpty(room.Id)) continue;
 
             // First entry wins on duplicates, Validate() reports them.
-            _roomsById.TryAdd(room.Id, room);
+            if (_roomsById.TryAdd(room.Id, room))
+            {
+                _roomIds.Add(room.Id);
+            }
 
             if (!string.IsNullOrEmpty(room.scene))
             {

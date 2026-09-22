@@ -187,6 +187,46 @@ public class WorldStreamer : MonoBehaviour
         yield return new WaitUntil(() => _worker == null);
     }
 
+    // Testing helper (used by DevModeManager): unloads the room the player is in and loads it again, so its enemies
+    // and everything else in it are reset. The player stays where they are.
+    // Only works once the room has its own scene, since the scene with the WorldStreamer in it is never unloaded.
+    public void ReloadCurrentRoom()
+    {
+        StartCoroutine(ReloadCurrentRoomRoutine());
+    }
+
+    private IEnumerator ReloadCurrentRoomRoutine()
+    {
+        if (CurrentRoom == null) yield break;
+
+        Scene roomScene = CurrentRoom.gameObject.scene;
+        if (roomScene == gameObject.scene)
+        {
+            Debug.LogWarning($"Can't reload room '{CurrentRoom.RoomId}' on its own, it's in the same scene as the WorldStreamer. Reload the whole scene instead.", this);
+            yield break;
+        }
+
+        string roomId = CurrentRoom.RoomId;
+        Vector2 position = playerRb != null ? playerRb.position : CurrentRoom.SpawnPosition;
+
+        // Freeze the player so they don't fall while the room's floor is gone.
+        bool wasSimulated = playerRb != null && playerRb.simulated;
+        if (playerRb != null)
+        {
+            playerRb.simulated = false;
+        }
+
+        // Let any load in progress finish first, so the worker and this don't both touch the scene at once.
+        yield return new WaitUntil(() => _worker == null);
+        yield return SceneManager.UnloadSceneAsync(roomScene);
+        yield return Teleport(roomId, position);
+
+        if (playerRb != null)
+        {
+            playerRb.simulated = wasSimulated;
+        }
+    }
+
     // Called by RoomTriggers whenever the player enters or leaves one.
     public void RefreshCurrentRoom()
     {

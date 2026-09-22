@@ -63,6 +63,18 @@ using UnityEngine.Rendering;
 // The saved presets will only show when you are runninig the game in the editor, they will not be included in a build since they are only saved to PlayerPrefs on the actual machine
 // You can also manually add them based on what the Debug.Log prints if you prefer
 
+// WORLD STREAMING:
+// The panel has a World Streaming section for testing the WorldStreamer (rooms/biomes loading and unloading)
+// It shows the current room, the current biome and every scene that is loaded right now, so you can watch rooms
+// load and unload as you walk around
+// Room Teleport cycles through every room in the WorldMap with the arrow buttons and teleports you into the selected one
+// through WorldStreamer.TeleportTo, which loads the room first if it is not loaded yet (the position presets above can't do that,
+// teleporting to a position in a room that isn't loaded just drops you into empty space)
+// Reload Current Room unloads the room you are in and loads it again, so its enemies respawn and everything in it resets
+// It only works once the room has its own scene. While everything is still in one scene, use Reload Scene (F4) instead
+// These are panel buttons only, since all the F keys are already taken
+// If there is no WorldStreamer in the scene, the section just says so and does nothing
+
 // THE DEBUG PANEL:
 
 // ONGUI is a Unity method that draws immediate-mode UI every frame on top of everything else. It only renders when both IsEnabled
@@ -83,6 +95,8 @@ using UnityEngine.Rendering;
 // TELEPORT TO PRESET : F11
 // TOGGLE GOD MODE : F12
 // UNLOCK ABILITIES : Digit 1 - 6 (Jump, Wall Jump, Dash, Stretch, Attack, Block respectively)
+
+// WORLD STREAMING : panel buttons only (Teleport to Room, Reload Current Room)
 
 // Note: Digit 1-6 is just the number keys at the top of the keyboard. This is so Unity can distiguish between those numbers and NumPad numbers
 
@@ -122,6 +136,9 @@ public class DevModeManager : MonoBehaviour
   [Header("Teleportation Presets")]
   [SerializeField] private Vector2[] teleportPresets = { Vector2.zero }; // add preset positions in inspector
   private int _selectedTeleportIndex = 0; // tracks which preset is currently selected in the panel
+
+  // World streaming variables. Tracks which room from the WorldMap is currently selected in the panel for Teleport to Room
+  private int _selectedRoomIndex = 0;
 
 
   private void Awake()
@@ -380,6 +397,8 @@ public class DevModeManager : MonoBehaviour
         Debug.Log("[DevMode] Unlocked all abilities");
     }
 
+    // Note: once the game is split into Core + room scenes, this loads the next scene in the build list ON ITS OWN
+    // (Core and the player get unloaded), so it is only really useful while everything is still in one scene
     private void LoadNextScene()
     {
         int next = (SceneManager.GetActiveScene().buildIndex + 1) % SceneManager.sceneCountInBuildSettings;
@@ -387,10 +406,55 @@ public class DevModeManager : MonoBehaviour
         Debug.Log($"[DevMode] Loaded next scene: {SceneManager.GetActiveScene().name}");
     }
 
+    // Note: once the game is split into Core + room scenes, the active scene is Core, so this reloads Core and unloads every room.
+    // The WorldStreamer then puts the player back in its Start Room Id, so make sure that is set
     private void ReloadScene()
     {
         SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
         Debug.Log($"[DevMode] Reloaded scene: {SceneManager.GetActiveScene().name}");
+    }
+
+    // WORLD STREAMING ACTIONS
+
+    // Every room id in the WorldMap, or null if there is no WorldStreamer/WorldMap to read them from
+    private System.Collections.Generic.IReadOnlyList<string> GetRoomIds()
+    {
+        WorldStreamer streamer = WorldStreamer.Instance;
+        if (streamer == null || streamer.Map == null) return null;
+        return streamer.Map.RoomIds;
+    }
+
+    // Teleports the player into the room selected in the panel. Unlike the position presets, this loads the room first
+    // if it is not loaded, puts the player on the room's spawn point, and snaps the camera
+    private void TeleportToSelectedRoom()
+    {
+        var roomIds = GetRoomIds();
+        if (roomIds == null || roomIds.Count == 0)
+        {
+            Debug.LogWarning("[DevMode] No WorldStreamer/WorldMap rooms to teleport to!");
+            return;
+        }
+
+        // Clamp the index so it does not go out of range (the WorldMap can change while playing in the editor)
+        _selectedRoomIndex = Mathf.Clamp(_selectedRoomIndex, 0, roomIds.Count - 1);
+
+        string roomId = roomIds[_selectedRoomIndex];
+        WorldStreamer.Instance.TeleportTo(roomId);
+        Debug.Log($"[DevMode] Teleporting to room: {roomId}");
+    }
+
+    // Unloads the room the player is in and loads it again, so its enemies respawn and it resets
+    private void ReloadCurrentRoom()
+    {
+        WorldStreamer streamer = WorldStreamer.Instance;
+        if (streamer == null || streamer.CurrentRoom == null)
+        {
+            Debug.LogWarning("[DevMode] No current room to reload!");
+            return;
+        }
+
+        Debug.Log($"[DevMode] Reloading room: {streamer.CurrentRoom.RoomId}");
+        streamer.ReloadCurrentRoom();
     }
 
 /////////// DEBUG PANEL (can be expanded with more settings as needed)///////////
@@ -401,10 +465,10 @@ public class DevModeManager : MonoBehaviour
 
         // Background of panel. Just colors and stuff, making it look nice
         GUI.color = new Color(0f, 0f, 0f, 0.82f);
-        GUI.DrawTexture(new Rect(10, 10, 490, 600), Texture2D.whiteTexture);
+        GUI.DrawTexture(new Rect(10, 10, 490, 830), Texture2D.whiteTexture); // taller than before to fit the World Streaming section
         GUI.color = Color.white;
 
-        GUILayout.BeginArea(new Rect(18, 16, 474, 588));
+        GUILayout.BeginArea(new Rect(18, 16, 474, 818));
 
         // DEVELOPER MODE HEADER
         GUIStyle header = new GUIStyle(GUI.skin.label) { fontSize = 13, fontStyle = FontStyle.Bold };
@@ -462,6 +526,51 @@ public class DevModeManager : MonoBehaviour
         GUILayout.Label("--- Scene Controls ---", info);
         if (GUILayout.Button("Load Next Scene (F3)")) LoadNextScene();
         if (GUILayout.Button("Reload Scene (F4)")) ReloadScene();
+
+        GUILayout.Space(4); // space before world streaming
+
+        // WORLD STREAMING
+        // Live info from the WorldStreamer, plus room teleport and room reload
+        GUILayout.Label("--- World Streaming ---", info);
+        WorldStreamer streamer = WorldStreamer.Instance;
+        if (streamer == null)
+        {
+            GUILayout.Label("No WorldStreamer in scene", info);
+        }
+        else
+        {
+            string roomName = streamer.CurrentRoom != null ? streamer.CurrentRoom.RoomId : "(none)";
+            string biomeName = streamer.CurrentBiome.HasValue ? streamer.CurrentBiome.Value.ToString() : "(none)";
+            GUILayout.Label($"Room        : {roomName}", info);
+            GUILayout.Label($"Biome       : {biomeName}", info);
+
+            // Every scene loaded right now, so you can watch rooms/biomes load and unload as you move
+            GUILayout.Label("Loaded Scenes :", info);
+            for (int i = 0; i < SceneManager.sceneCount; i++)
+            {
+                Scene loadedScene = SceneManager.GetSceneAt(i);
+                GUILayout.Label($"  {loadedScene.name}{(loadedScene.isLoaded ? "" : " (loading)")}", info);
+            }
+
+            // Arrow buttons cycle through the rooms in the WorldMap, same as the teleport presets
+            var roomIds = GetRoomIds();
+            int roomCount = roomIds != null ? roomIds.Count : 0;
+            _selectedRoomIndex = Mathf.Clamp(_selectedRoomIndex, 0, Mathf.Max(0, roomCount - 1));
+
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("<", GUILayout.Width(30)))
+                _selectedRoomIndex = Mathf.Max(0, _selectedRoomIndex - 1);
+
+            string roomLabel = roomCount > 0 ? $"Room: {roomIds[_selectedRoomIndex]}" : "No rooms in WorldMap";
+            GUILayout.Label(roomLabel, info);
+
+            if (GUILayout.Button(">", GUILayout.Width(30)))
+                _selectedRoomIndex = Mathf.Min(Mathf.Max(0, roomCount - 1), _selectedRoomIndex + 1);
+            GUILayout.EndHorizontal();
+
+            if (GUILayout.Button("Teleport to Room")) TeleportToSelectedRoom();
+            if (GUILayout.Button("Reload Current Room")) ReloadCurrentRoom();
+        }
 
         GUILayout.EndVertical();
 
