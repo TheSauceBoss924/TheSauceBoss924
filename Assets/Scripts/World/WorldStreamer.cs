@@ -10,14 +10,14 @@ using Unity.Cinemachine;
 //   - works out which room the player is in from the RoomTriggers they're overlapping
 //   - points the CinemachineConfiner2D at that room's bounds
 //   - fires OnBiomeChanged when the player crosses into a different biome
-//   - keeps only what's needed loaded:
-//       * the current room's scene, plus the neighbor scenes listed on its RoomTrigger (so the player can
-//         walk straight into them, their triggers have to exist before the player gets there)
+//   - keeps only what's needed loaded, using the WorldMap to know how rooms connect:
+//       * the current room's scene, plus the scenes of its neighbor rooms (so the player can walk straight
+//         into them, their triggers have to exist before the player gets there)
 //       * the current biome's background scene (shown)
 //       * the background scene of any neighboring room in another biome (loaded but hidden by BiomeBackground,
 //         so crossing a biome border doesn't pop in)
-//     Every other room/biome scene gets unloaded.
-// Rooms that are all in one big scene still work: with no neighbor scenes listed nothing gets streamed,
+//     Every other room/biome scene in the WorldMap gets unloaded.
+// Rooms that are all in one big scene still work: every room there shares one scene, so nothing gets streamed,
 // and it just handles the confiner and biome changes like RoomManager did.
 public class WorldStreamer : MonoBehaviour
 {
@@ -29,26 +29,26 @@ public class WorldStreamer : MonoBehaviour
     // It also fires once for the first room the player is placed in; anything subscribing later can read CurrentBiome.
     public static event Action<BiomeType> OnBiomeChanged;
 
+    [SerializeField] private WorldMap worldMap;
     [SerializeField] private CinemachineConfiner2D confiner;
     [SerializeField] private CameraTarget cameraTarget;
     [SerializeField] private Rigidbody2D playerRb;
 
-    [Tooltip("One profile per biome. Its backgroundScene is loaded while the player is in (or next to) that biome.")]
-    [SerializeField] private BiomeProfile[] biomeProfiles = Array.Empty<BiomeProfile>();
+    [Tooltip("Room id to load on startup if the player isn't already standing in a room (e.g. when the game boots straight into Core).")]
+    [SerializeField] private string startRoomId;
 
-    [Tooltip("Room scene to load on startup if the player isn't already standing in a room (e.g. when the game boots straight into Core).")]
-    [SerializeField] private string startRoomScene;
-
+    public WorldMap Map => worldMap;
     public RoomTrigger CurrentRoom { get; private set; }
+    public WorldMap.RoomEntry CurrentRoomEntry { get; private set; }
     public BiomeType? CurrentBiome { get; private set; }
     public BiomeProfile CurrentBiomeProfile => CurrentBiome.HasValue ? GetProfile(CurrentBiome.Value) : null;
 
     // Scenes that should be loaded right now, most important first.
     private readonly List<string> _desiredScenes = new();
-    // Every room/biome scene we've come across. Only these ever get unloaded, so Core is never touched.
-    private readonly HashSet<string> _streamableScenes = new();
     // Scenes that failed to load (typo, or missing from the build scene list), so we don't retry them every frame.
     private readonly HashSet<string> _invalidScenes = new();
+    // Room ids we've already warned about missing from the WorldMap, so the warning only shows once.
+    private readonly HashSet<string> _unmappedRooms = new();
 
     private string _teleportScene;
     private Coroutine _worker;
@@ -70,17 +70,20 @@ public class WorldStreamer : MonoBehaviour
         }
         Instance = this;
 
+        if (worldMap == null)
+        {
+            Debug.LogError("WorldStreamer has no WorldMap assigned, so it can only update the camera confiner. Nothing will be streamed and biomes won't change.", this);
+        }
+#if UNITY_EDITOR
+        else
+        {
+            worldMap.Validate();
+        }
+#endif
+
         if (confiner == null)
         {
             confiner = FindAnyObjectByType<CinemachineConfiner2D>();
-        }
-
-        foreach (BiomeProfile profile in biomeProfiles)
-        {
-            if (profile != null && !string.IsNullOrEmpty(profile.backgroundScene))
-            {
-                _streamableScenes.Add(profile.backgroundScene);
-            }
         }
 
         // Rooms that were already loaded before we existed (e.g. pressing Play inside a room scene) missed registering.
@@ -101,11 +104,11 @@ public class WorldStreamer : MonoBehaviour
         // and WorldBootstrap loaded Core around it. Either way, put the player somewhere sensible.
         if (RoomTrigger.All.Count > 0)
         {
-            TeleportTo(RoomTrigger.All[0].gameObject.scene.name);
+            TeleportTo(RoomTrigger.All[0].RoomId);
         }
-        else if (!string.IsNullOrEmpty(startRoomScene))
+        else if (!string.IsNullOrEmpty(startRoomId))
         {
-            TeleportTo(startRoomScene);
+            TeleportTo(startRoomId);
         }
     }
 
@@ -134,15 +137,21 @@ public class WorldStreamer : MonoBehaviour
     // Instantly moves the player into a room, loading its scene first if needed. Use this for respawning,
     // loading a save or fast travel. Walking between rooms doesn't need it, that's handled by the triggers.
     // position: where to put the player. Leave null to use the room's spawn point.
-    public void TeleportTo(string roomScene, Vector2? position = null, float facingDirection = 1f)
+    public void TeleportTo(string roomId, Vector2? position = null, float facingDirection = 1f)
     {
-        StartCoroutine(Teleport(roomScene, position, facingDirection));
+        StartCoroutine(Teleport(roomId, position, facingDirection));
     }
 
     // Same as TeleportTo, but can be yielded on from your own coroutine (e.g. between a fade out and fade in).
     // It finishes once the room, its biome background and its neighbors are all loaded.
-    public IEnumerator Teleport(string roomScene, Vector2? position = null, float facingDirection = 1f)
+    public IEnumerator Teleport(string roomId, Vector2? position = null, float facingDirection = 1f)
     {
+        string roomScene = GetSceneOfRoom(roomId);
+        if (roomScene == null)
+        {
+            Debug.LogError($"Can't teleport into room '{roomId}', it isn't in the WorldMap and isn't loaded.", this);
+            yield break;
+        }
         if (!CanLoad(roomScene)) yield break;
 
         _teleportScene = roomScene;
@@ -150,10 +159,10 @@ public class WorldStreamer : MonoBehaviour
         yield return new WaitUntil(() => IsLoaded(roomScene) || _invalidScenes.Contains(roomScene));
         _teleportScene = null;
 
-        RoomTrigger room = FindRoom(roomScene, position);
+        RoomTrigger room = FindLoadedRoom(roomId);
         if (room == null)
         {
-            Debug.LogError($"Can't teleport into '{roomScene}', it has no RoomTrigger in it.", this);
+            Debug.LogError($"Can't teleport into room '{roomId}', there's no RoomTrigger with that id in scene '{roomScene}'.", this);
             UpdateStreaming();
             yield break;
         }
@@ -199,37 +208,23 @@ public class WorldStreamer : MonoBehaviour
 
     public void RegisterRoom(RoomTrigger room)
     {
-        if (room.gameObject.scene != gameObject.scene)
+        if (worldMap != null && !worldMap.TryGetRoom(room.RoomId, out _) && _unmappedRooms.Add(room.RoomId))
         {
-            _streamableScenes.Add(room.gameObject.scene.name);
+            Debug.LogWarning($"Room '{room.RoomId}' (scene '{room.gameObject.scene.name}') isn't in the WorldMap. Its camera bounds still work, but its biome and neighbors are unknown.", room);
         }
-
-        // A neighbor that just finished loading might be in another biome whose background we should preload.
-        UpdateStreaming();
     }
 
     public void UnregisterRoom(RoomTrigger room)
     {
-        if (room == CurrentRoom)
-        {
-            CurrentRoom = null;
-            RefreshCurrentRoom();
-        }
+        if (room != CurrentRoom) return;
 
+        CurrentRoom = null;
+        CurrentRoomEntry = null;
+        RefreshCurrentRoom();
         UpdateStreaming();
     }
 
-    public BiomeProfile GetProfile(BiomeType biome)
-    {
-        foreach (BiomeProfile profile in biomeProfiles)
-        {
-            if (profile != null && profile.biome == biome)
-            {
-                return profile;
-            }
-        }
-        return null;
-    }
+    public BiomeProfile GetProfile(BiomeType biome) => worldMap != null ? worldMap.GetBiome(biome) : null;
 
     private void SetCurrentRoom(RoomTrigger room)
     {
@@ -242,11 +237,13 @@ public class WorldStreamer : MonoBehaviour
             confiner.InvalidateBoundingShapeCache();
         }
 
-        if (CurrentBiome != room.Biome)
+        // A room missing from the map keeps the previous biome rather than guessing one.
+        CurrentRoomEntry = worldMap != null && worldMap.TryGetRoom(room.RoomId, out WorldMap.RoomEntry entry) ? entry : null;
+        if (CurrentRoomEntry != null && CurrentBiome != CurrentRoomEntry.biome)
         {
-            CurrentBiome = room.Biome;
-            BiomeBackground.ShowOnly(room.Biome);
-            OnBiomeChanged?.Invoke(room.Biome);
+            CurrentBiome = CurrentRoomEntry.biome;
+            BiomeBackground.ShowOnly(CurrentRoomEntry.biome);
+            OnBiomeChanged?.Invoke(CurrentRoomEntry.biome);
         }
 
         UpdateStreaming();
@@ -270,50 +267,37 @@ public class WorldStreamer : MonoBehaviour
         if (CurrentRoom == null) return;
 
         AddDesired(CurrentRoom.gameObject.scene.name);
+        if (CurrentRoomEntry == null) return;
 
-        BiomeProfile currentProfile = CurrentBiomeProfile;
-        if (currentProfile != null)
+        AddBiomeBackground(CurrentRoomEntry.biome);
+
+        foreach (string neighborId in worldMap.GetNeighbors(CurrentRoomEntry.Id))
         {
-            AddDesired(currentProfile.backgroundScene);
-        }
+            if (!worldMap.TryGetRoom(neighborId, out WorldMap.RoomEntry neighbor)) continue;
 
-        foreach (string neighbor in CurrentRoom.NeighborScenes)
-        {
-            AddDesired(neighbor);
-        }
+            AddDesired(neighbor.scene);
 
-        // Loaded neighbors in a different biome: preload that biome's background (hidden) ahead of the border.
-        foreach (RoomTrigger room in RoomTrigger.All)
-        {
-            if (room.Biome == CurrentRoom.Biome || !IsNeighborOfCurrentRoom(room)) continue;
-
-            BiomeProfile profile = GetProfile(room.Biome);
-            if (profile != null)
+            // Neighbor in a different biome: preload that biome's background (hidden) ahead of the border.
+            if (neighbor.biome != CurrentRoomEntry.biome)
             {
-                AddDesired(profile.backgroundScene);
+                AddBiomeBackground(neighbor.biome);
             }
         }
     }
 
-    private bool IsNeighborOfCurrentRoom(RoomTrigger room)
+    private void AddBiomeBackground(BiomeType biome)
     {
-        string sceneName = room.gameObject.scene.name;
-        foreach (string neighbor in CurrentRoom.NeighborScenes)
+        BiomeProfile profile = GetProfile(biome);
+        if (profile != null)
         {
-            if (neighbor == sceneName) return true;
+            AddDesired(profile.backgroundScene);
         }
-        return false;
     }
 
     private void AddDesired(string sceneName)
     {
         if (string.IsNullOrEmpty(sceneName) || _desiredScenes.Contains(sceneName) || !CanLoad(sceneName)) return;
-
         _desiredScenes.Add(sceneName);
-        if (sceneName != gameObject.scene.name)
-        {
-            _streamableScenes.Add(sceneName);
-        }
     }
 
     // Loads and unloads one scene at a time, re-checking what's wanted after each one. That way a player who
@@ -339,8 +323,8 @@ public class WorldStreamer : MonoBehaviour
                 AsyncOperation unload = SceneManager.UnloadSceneAsync(toUnload);
                 if (unload == null)
                 {
-                    // Unity refused (e.g. it's the only scene left), so stop managing it rather than retrying forever.
-                    _streamableScenes.Remove(toUnload);
+                    // Unity refused (e.g. it's the only scene left), so stop trying to unload it.
+                    MarkInvalid(toUnload);
                     continue;
                 }
                 yield return unload;
@@ -368,15 +352,18 @@ public class WorldStreamer : MonoBehaviour
     private string FindStaleScene()
     {
         // Don't unload anything until we know where the player is.
-        if (CurrentRoom == null) return null;
+        if (CurrentRoom == null || worldMap == null) return null;
 
         for (int i = 0; i < SceneManager.sceneCount; i++)
         {
             Scene scene = SceneManager.GetSceneAt(i);
+
+            // Only scenes the WorldMap knows about are ever unloaded, and never the scene this streamer is in (Core).
             if (scene.isLoaded
                 && scene != gameObject.scene
-                && _streamableScenes.Contains(scene.name)
-                && !_desiredScenes.Contains(scene.name))
+                && worldMap.ContainsScene(scene.name)
+                && !_desiredScenes.Contains(scene.name)
+                && !_invalidScenes.Contains(scene.name))
             {
                 return scene.name;
             }
@@ -384,16 +371,25 @@ public class WorldStreamer : MonoBehaviour
         return null;
     }
 
-    private RoomTrigger FindRoom(string sceneName, Vector2? position)
+    // The map is the source of truth, but a loaded room that's missing from it can still be teleported into.
+    private string GetSceneOfRoom(string roomId)
     {
-        RoomTrigger firstInScene = null;
+        if (worldMap != null && worldMap.TryGetRoom(roomId, out WorldMap.RoomEntry entry))
+        {
+            return entry.scene;
+        }
+
+        RoomTrigger loaded = FindLoadedRoom(roomId);
+        return loaded != null ? loaded.gameObject.scene.name : null;
+    }
+
+    private static RoomTrigger FindLoadedRoom(string roomId)
+    {
         foreach (RoomTrigger room in RoomTrigger.All)
         {
-            if (room.gameObject.scene.name != sceneName) continue;
-            if (position == null || room.Contains(position.Value)) return room;
-            if (firstInScene == null) firstInScene = room;
+            if (room.RoomId == roomId) return room;
         }
-        return firstInScene;
+        return null;
     }
 
     private static bool IsLoaded(string sceneName) => SceneManager.GetSceneByName(sceneName).isLoaded;
@@ -411,7 +407,7 @@ public class WorldStreamer : MonoBehaviour
     {
         if (_invalidScenes.Add(sceneName))
         {
-            Debug.LogError($"Scene '{sceneName}' couldn't be loaded. Check the name matches, and that the scene is in the build scene list.", this);
+            Debug.LogError($"Scene '{sceneName}' couldn't be loaded or unloaded. Check the name in the WorldMap matches, and that the scene is in the build scene list.", this);
         }
     }
 }

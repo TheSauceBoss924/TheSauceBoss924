@@ -6,7 +6,7 @@ using UnityEngine;
 // If we need any extra properties for a biome, we can add them here. Anything that reacts to biome changes
 // (music, lighting, etc.) subscribes to WorldStreamer.OnBiomeChanged and reads WorldStreamer.Instance.CurrentBiomeProfile.
 // (These are just placeholders for now, we can add more or change properties as needed.)
-// Every biome profile also needs to be added to the WorldStreamer's Biome Profiles list in the Core scene.
+// Every biome profile also needs to be added to the Biomes list on the WorldMap asset.
 
 // The BiomeProfile ScriptableObject can be created in the Unity Editor by right-clicking in the Project window,
 // selecting "Create" -> "Biome Profile", and then filling in the properties in the Inspector.

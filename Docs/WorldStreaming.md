@@ -8,11 +8,14 @@ The world is split into three kinds of scenes, loaded additively on top of each 
 | **Biome background** (e.g. `Biome_Fire`) | The current biome's, plus a hidden one next to a biome border | `BiomeBackground` on the root; parallax layers, Global Light 2D, post-processing Volume and ambient audio under its `content` object |
 | **Room** (e.g. `Fire_03`) | The current room and its neighbors | Tilemaps, colliders, enemies, a `RoomTrigger` with its confiner bounds |
 
+The layout of the world lives in one **`WorldMap`** asset. It lists every room's scene, biome and neighbors, plus every biome's profile.
+
 When the player walks into a room, `WorldStreamer`:
 - confines the camera to that room,
+- looks the room up in the `WorldMap`,
 - fires `WorldStreamer.OnBiomeChanged` if the biome changed, and shows that biome's background,
-- loads the room's neighbors and the current biome background, plus the hidden background of any neighboring biome,
-- unloads every other room and biome scene.
+- loads the room's neighbors and the current biome background, plus the hidden background of any neighbor in a different biome,
+- unloads every other room and biome scene that's in the map.
 
 Walking between rooms needs no fade or door script. Neighbors are already loaded, so the player walks straight into them.
 
@@ -20,6 +23,7 @@ Walking between rooms needs no fade or door script. Neighbors are already loaded
 
 | Script | Where | Purpose |
 |---|---|---|
+| `WorldMap` | One asset | Every room (id, scene, biome, neighbors) and every biome profile, turned into dictionaries at runtime |
 | `WorldStreamer` | Core | Picks the current room, sets the confiner, fires biome changes, loads and unloads scenes, `TeleportTo` for respawn, save loading and fast travel |
 | `RoomTrigger` | Each room | Replaces `RoomManager`. Reports when the player enters or leaves the room |
 | `BiomeBackground` | Root of each biome scene | Shows its content only while its biome is current |
@@ -27,27 +31,40 @@ Walking between rooms needs no fade or door script. Neighbors are already loaded
 | `WorldBootstrap` | Editor only | Pressing Play in a room scene loads Core automatically |
 | `CameraTarget` | Core | `SnapToPlayer` now fully resets and cuts the camera after a teleport |
 
+## The WorldMap asset
+
+Create it with **Create → World → World Map**, then fill in:
+
+- **Biomes**: drag in every `BiomeProfile`. One per biome.
+- **Rooms**: one entry per room:
+  - **Id**: leave empty and it uses the scene name. Only fill it in while several rooms share one scene, and put the same id on that room's `RoomTrigger`.
+  - **Scene**: the scene the room lives in.
+  - **Biome**: which biome it's in.
+  - **Neighbors**: ids of rooms you can walk into from here. Each connection only needs listing **once**. If Fire_02 lists Fire_03, then Fire_03 → Fire_02 is added automatically.
+
+Right-click the asset's Inspector header and pick **Validate** to check for duplicate ids, neighbors that don't exist, and biomes with no profile. It also runs automatically every time you press Play. At runtime, a `RoomTrigger` whose id isn't in the map logs a warning.
+
 ## Migrating from RoomManager
 
-1. **Keep your existing room triggers.** `RoomManager.cs` was renamed to `RoomTrigger.cs`. In Unity, rename the file in the Project window first so its `.meta` GUID is kept, then replace its contents. Existing components keep their `roomBounds` and `biome` values. The old `confiner` field is gone because the streamer owns the confiner now.
-2. **Add a `WorldStreamer`** to a GameObject next to the player and camera. Assign the confiner, camera target, player Rigidbody2D and all your `BiomeProfile` assets.
-3. **Nothing else is needed while everything is still in one scene.** Leave `neighborScenes` empty and it works the same way `RoomManager` did, plus the fixes below.
-4. **Split scenes when you're ready:**
+1. **Keep your existing room triggers.** `RoomManager.cs` was renamed to `RoomTrigger.cs`. In Unity, rename the file in the Project window first so its `.meta` GUID is kept, then replace its contents. Existing components keep their `roomBounds` value. `biome` and `confiner` have moved out: the biome is set in the WorldMap, and the streamer owns the confiner.
+2. **Give each room trigger a `roomId`**, e.g. `Fire_01`, while everything is still in one scene.
+3. **Create a `WorldMap`.** Add every biome profile. Add a room entry per trigger with the same id, the one scene's name, and its biome. Neighbors can stay empty until you split scenes.
+4. **Add a `WorldStreamer`** to a GameObject next to the player and camera. Assign the WorldMap, confiner, camera target and player Rigidbody2D.
+5. **Split scenes when you're ready:**
    1. Move the player, cameras, CameraTarget, WorldStreamer, UI and EventSystem into a scene named `Core`.
-   2. Move each room into its own scene.
+   2. Move each room into its own scene and clear the `roomId` on its trigger. It will then use the scene name.
    3. Move each biome's backgrounds, global light and volume into its own scene under a `BiomeBackground` content object. Leave the content object **inactive** in the scene.
    4. Add every scene to the build scene list, with Core first.
-   5. Fill in `backgroundScene` on each `BiomeProfile`, and `neighborScenes` on each `RoomTrigger`.
-   6. Set `startRoomScene` on the WorldStreamer for when the game boots into Core.
+   5. Update the WorldMap: set each room's scene, clear its id, and fill in neighbors. Also fill in `backgroundScene` on each `BiomeProfile`.
+   6. Set `startRoomId` on the WorldStreamer for when the game boots into Core.
 
 ## Rules for each scene
 
 - Room and biome scenes must **not** contain a camera, AudioListener, EventSystem, Player or WorldStreamer. Those live only in Core.
 - Lighting: keep one Global Light 2D per sorting layer, in the **biome** scene only. Rooms use local lights.
-- `neighborScenes` should list every room the player can walk into directly. List both directions (A lists B, and B lists A). Otherwise the room behind the player can unload while they're standing in the doorway.
 - Keep room scenes light, because they load while the player walks. Put heavy art in the biome scene, which only loads near biome borders.
 - Make each room's confiner bounds at least as big as the camera view at maximum fall zoom (`CameraTarget` zooms the ortho size out), or the confiner will clamp hard.
-- Scene names are plain strings. If you rename a scene, update the RoomTriggers and BiomeProfiles that point to it. A clear error is logged if a name doesn't match.
+- Scene names and room ids are plain strings. If you rename a scene, update the WorldMap. Validate and the runtime error messages will point at anything that doesn't match.
 
 ## Reacting to biome changes
 
@@ -70,7 +87,7 @@ The event also fires for the first room the player is placed in. Anything that s
 IEnumerator Respawn()
 {
     yield return fader.FadeOut();
-    yield return WorldStreamer.Instance.Teleport("Fire_03");   // uses the room's spawnPoint
+    yield return WorldStreamer.Instance.Teleport("Fire_03");   // room id; uses the room's spawnPoint
     yield return fader.FadeIn();
 }
 ```

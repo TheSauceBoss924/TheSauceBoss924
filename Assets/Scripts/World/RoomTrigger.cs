@@ -1,24 +1,20 @@
-using System;
 using System.Collections.Generic;
 using UnityEngine;
 
 // The RoomTrigger script (formerly RoomManager) goes on a trigger collider covering each room/level, same as before.
-// It no longer changes the confiner or tracks the biome itself. It only reports "the player entered/left me",
-// and the WorldStreamer in the Core scene decides which room is current, updates the confiner, fires biome changes,
-// and loads/unloads scenes around the player.
+// It only reports "the player entered/left me". The WorldStreamer in the Core scene decides which room is current,
+// and looks the room up in the WorldMap to find its biome and neighbors.
 //
 // Per room, set in the inspector:
+//   - roomId: must match the room's id in the WorldMap. Leave empty to use the scene name, which is all you need
+//     once every room has its own scene. Only fill it in while several rooms share one scene.
 //   - roomBounds: the camera confiner shape (defaults to this object's collider if left empty)
-//   - biome: which biome the room belongs to
-//   - neighborScenes: names of the room scenes you can walk into from this room. Only needed once rooms live in
-//     their own scenes; leave empty while everything is still in one scene.
 //   - spawnPoint (optional): where the player gets placed when teleporting/respawning into this room
 [RequireComponent(typeof(Collider2D))]
 public class RoomTrigger : MonoBehaviour
 {
+    [SerializeField] private string roomId;
     [SerializeField] private Collider2D roomBounds;
-    [SerializeField] private BiomeType biome;
-    [SerializeField] private string[] neighborScenes = Array.Empty<string>();
     [SerializeField] private Transform spawnPoint;
 
     // Every RoomTrigger in every loaded scene, so the WorldStreamer can look across rooms without Find calls.
@@ -33,14 +29,11 @@ public class RoomTrigger : MonoBehaviour
     // Counted instead of a bool in case the player has more than one collider tagged "Player".
     private int _playerContacts;
 
+    public string RoomId => string.IsNullOrEmpty(roomId) ? gameObject.scene.name : roomId;
     public Collider2D Bounds => roomBounds;
-    public BiomeType Biome => biome;
-    public IReadOnlyList<string> NeighborScenes => neighborScenes ?? Array.Empty<string>();
     public bool PlayerInside => _playerContacts > 0;
     public int EnterOrder { get; private set; }
     public Vector2 SpawnPosition => spawnPoint != null ? (Vector2)spawnPoint.position : (Vector2)roomBounds.bounds.center;
-
-    public bool Contains(Vector2 point) => _trigger.OverlapPoint(point);
 
     // Clears the statics when entering play mode with domain reload turned off (Enter Play Mode Options),
     // otherwise rooms from the last play session would still be in the list.
