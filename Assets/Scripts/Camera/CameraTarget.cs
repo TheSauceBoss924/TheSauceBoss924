@@ -3,8 +3,8 @@ using UnityEngine.InputSystem;
 using Unity.Cinemachine;
 
 // This is the Camera Target script that is attached to the camera target object. It handles the camera's position and behavior based on the player's movement and state.
-// Both the Target and the Camera are Prefabs so that you can place them wherever you want in whatever scene you want, and then assign all the Player's
-// properties accordingly. The camera target is the object that the camera follows, and it is responsible for calculating the camera's position based on the player's movement and state.
+// Both the Target and the Camera are Prefabs. With world streaming they live in the Core scene alongside the Player and the WorldStreamer,
+// and only there, since room and biome scenes get loaded and unloaded around them.
 
 public class CameraTarget : MonoBehaviour
 {
@@ -84,7 +84,7 @@ public class CameraTarget : MonoBehaviour
 
     private void LateUpdate()
     {
-        if (playerRb == null || player == null) return;
+        if (playerRb == null || player == null || stateController == null) return;
 
         // Horizontal lead
         if (Mathf.Abs(playerRb.linearVelocity.x) > 0.1f)
@@ -167,19 +167,42 @@ public class CameraTarget : MonoBehaviour
         );
     }
 
+    // Called after the player is moved instantly (teleport, respawn, loading a save). Clears all the smoothing, pan and zoom
+    // state so nothing carries over from where the player was, and tells Cinemachine to cut instead of sliding across the map.
     public void SnapToPlayer(float facingDirection = 1f)
     {
         if (player == null) return;
 
         _followedPlayerY = player.transform.position.y;
+        _followedPlayerYVelocity = 0f;
         _lastDirection = facingDirection;
         _currentOffset.x = _lastDirection * horizontalLeadDistance;
         _currentOffset.y = _baselineOffset.y;
+
+        _fallPanOffset = 0f;
+        _fallStartY = player.transform.position.y;
+        _wasFalling = false;
+        _lookDownHoldTimer = 0f;
+        _lookDownOffset = 0f;
+        _fallZoomOffset = 0f;
+        _ascentZoomOffset = 0f;
 
         transform.position = new Vector3(
             player.transform.position.x + _currentOffset.x,
             _followedPlayerY + _baselineOffset.y,
             transform.position.z
         );
+
+        if (cinemachineCamera != null)
+        {
+            // _baseOrthoSize is only set in Start, so skip the lens reset if we get snapped before that.
+            if (_baseOrthoSize > 0f)
+            {
+                var lens = cinemachineCamera.Lens;
+                lens.OrthographicSize = _baseOrthoSize;
+                cinemachineCamera.Lens = lens;
+            }
+            cinemachineCamera.PreviousStateIsValid = false;
+        }
     }
 }
