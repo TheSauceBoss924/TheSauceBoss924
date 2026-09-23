@@ -30,6 +30,8 @@ Walking between rooms needs no fade or door script. Neighbors are already loaded
 | `BiomeProfile` | Asset per biome | Now also holds `backgroundScene` |
 | `WorldBootstrap` | Editor only | Pressing Play in a room scene loads Core automatically |
 | `CameraTarget` | Core | `SnapToPlayer` now fully resets and cuts the camera after a teleport |
+| `RoomTransitionSmoother` | On the CinemachineCamera | Glides the camera into a new room instead of snapping when the confiner switches bounds |
+| `SceneSummaryExporter` | Editor only | Tools → Scene Summary: exports a text summary of the open scenes |
 
 ## The WorldMap asset
 
@@ -65,6 +67,15 @@ Right-click the asset's Inspector header and pick **Validate** to check for dupl
 - Keep room scenes light, because they load while the player walks. Put heavy art in the biome scene, which only loads near biome borders.
 - Make each room's confiner bounds at least as big as the camera view at maximum fall zoom (`CameraTarget` zooms the ortho size out), or the confiner will clamp hard.
 - Scene names and room ids are plain strings. If you rename a scene, update the WorldMap. Validate and the runtime error messages will point at anything that doesn't match.
+
+## Lessons from setting up the PlayGround
+
+- **Room shapes don't have to be boxes.** Where a rectangle would swallow part of a neighboring room (an L-shaped area, or a corridor running under another room), use a **Polygon Collider 2D** (Is Trigger ticked) instead of a Box Collider 2D. Keep **Paths → Size = 1** and set the corner count on **Element 0**. The room trigger and the camera confiner both use the polygon.
+- **Every spot the player can stand must be inside some room.** A gap between rooms keeps the previous room's camera bounds, so the player can walk off-screen there.
+- **Drag scene objects in from the Hierarchy, not the Project window.** If the WorldStreamer's Confiner or Camera Target points at a prefab asset, it changes the prefab file instead of the scene camera, and nothing happens in game.
+- **The CinemachineConfiner2D must be enabled.** Leave its Bounding Shape 2D empty; the WorldStreamer sets it.
+- **The confiner's own Damping doesn't soften room switches** (it only smooths corners). `RoomTransitionSmoother` does; tune its Glide Time.
+- **Biome background scenes** need `BiomeBackground` on their root, an inactive `Content` child, no camera, and must be in the build scene list. Put the scene's name in the BiomeProfile's **Background Scene**.
 
 ## Reacting to biome changes
 
