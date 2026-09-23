@@ -26,7 +26,7 @@ public class RoomTrigger : MonoBehaviour
 
     private Collider2D _trigger;
 
-    // Counted instead of a bool in case the player has more than one collider tagged "Player".
+    // Counted instead of a bool because the player has more than one collider (Hitbox and Hurtbox both enter the trigger).
     private int _playerContacts;
 
     public string RoomId => string.IsNullOrEmpty(roomId) ? gameObject.scene.name : roomId;
@@ -76,9 +76,16 @@ public class RoomTrigger : MonoBehaviour
         }
     }
 
+    // The player's colliders live on child objects (Hitbox, Hurtbox) that aren't tagged "Player" themselves,
+    // so check the tag on the Rigidbody2D they're attached to (the Player root) instead of on the collider.
+    private static bool IsPlayer(Collider2D other)
+    {
+        return other.attachedRigidbody != null && other.attachedRigidbody.CompareTag("Player");
+    }
+
     private void OnTriggerEnter2D(Collider2D other)
     {
-        if (!other.CompareTag("Player")) return;
+        if (!IsPlayer(other)) return;
 
         _playerContacts++;
         if (_playerContacts == 1)
@@ -96,7 +103,7 @@ public class RoomTrigger : MonoBehaviour
     // without ever leaving it, no enter fires, so the current room has to be re-picked when they leave the newer one.
     private void OnTriggerExit2D(Collider2D other)
     {
-        if (!other.CompareTag("Player") || _playerContacts == 0) return;
+        if (!IsPlayer(other) || _playerContacts == 0) return;
 
         _playerContacts--;
         if (_playerContacts == 0 && WorldStreamer.Instance != null)
