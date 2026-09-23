@@ -140,6 +140,9 @@ public class DevModeManager : MonoBehaviour
   // World streaming variables. Tracks which room from the WorldMap is currently selected in the panel for Teleport to Room
   private int _selectedRoomIndex = 0;
 
+  // Height of the panel background. Measured from the panel's content every frame so the background always fits it exactly
+  private float _panelHeight = 600f;
+
 
   private void Awake()
     {
@@ -465,10 +468,11 @@ public class DevModeManager : MonoBehaviour
 
         // Background of panel. Just colors and stuff, making it look nice
         GUI.color = new Color(0f, 0f, 0f, 0.82f);
-        GUI.DrawTexture(new Rect(10, 10, 490, 830), Texture2D.whiteTexture); // taller than before to fit the World Streaming section
+        GUI.DrawTexture(new Rect(10, 10, 490, _panelHeight), Texture2D.whiteTexture); // height fits the content, measured at the bottom of OnGUI
         GUI.color = Color.white;
 
-        GUILayout.BeginArea(new Rect(18, 16, 474, 818));
+        // The layout area is as tall as the screen so nothing gets cut off. The background above sets the visible size
+        GUILayout.BeginArea(new Rect(18, 16, 474, Screen.height));
 
         // DEVELOPER MODE HEADER
         GUIStyle header = new GUIStyle(GUI.skin.label) { fontSize = 13, fontStyle = FontStyle.Bold };
@@ -479,6 +483,9 @@ public class DevModeManager : MonoBehaviour
         // LIVE STATE INFORMATION
         GUIStyle info = new GUIStyle(GUI.skin.label) { fontSize = 11 };
         info.normal.textColor = Color.white;
+
+        // Same as info, but wraps onto the next line instead of running off the side (used for the loaded scenes list)
+        GUIStyle infoWrap = new GUIStyle(info) { wordWrap = true };
 
         GUILayout.BeginHorizontal();
 
@@ -527,56 +534,12 @@ public class DevModeManager : MonoBehaviour
         if (GUILayout.Button("Load Next Scene (F3)")) LoadNextScene();
         if (GUILayout.Button("Reload Scene (F4)")) ReloadScene();
 
-        GUILayout.Space(4); // space before world streaming
-
-        // WORLD STREAMING
-        // Live info from the WorldStreamer, plus room teleport and room reload
-        GUILayout.Label("--- World Streaming ---", info);
-        WorldStreamer streamer = WorldStreamer.Instance;
-        if (streamer == null)
-        {
-            GUILayout.Label("No WorldStreamer in scene", info);
-        }
-        else
-        {
-            string roomName = streamer.CurrentRoom != null ? streamer.CurrentRoom.RoomId : "(none)";
-            string biomeName = streamer.CurrentBiome.HasValue ? streamer.CurrentBiome.Value.ToString() : "(none)";
-            GUILayout.Label($"Room        : {roomName}", info);
-            GUILayout.Label($"Biome       : {biomeName}", info);
-
-            // Every scene loaded right now, so you can watch rooms/biomes load and unload as you move
-            GUILayout.Label("Loaded Scenes :", info);
-            for (int i = 0; i < SceneManager.sceneCount; i++)
-            {
-                Scene loadedScene = SceneManager.GetSceneAt(i);
-                GUILayout.Label($"  {loadedScene.name}{(loadedScene.isLoaded ? "" : " (loading)")}", info);
-            }
-
-            // Arrow buttons cycle through the rooms in the WorldMap, same as the teleport presets
-            var roomIds = GetRoomIds();
-            int roomCount = roomIds != null ? roomIds.Count : 0;
-            _selectedRoomIndex = Mathf.Clamp(_selectedRoomIndex, 0, Mathf.Max(0, roomCount - 1));
-
-            GUILayout.BeginHorizontal();
-            if (GUILayout.Button("<", GUILayout.Width(30)))
-                _selectedRoomIndex = Mathf.Max(0, _selectedRoomIndex - 1);
-
-            string roomLabel = roomCount > 0 ? $"Room: {roomIds[_selectedRoomIndex]}" : "No rooms in WorldMap";
-            GUILayout.Label(roomLabel, info);
-
-            if (GUILayout.Button(">", GUILayout.Width(30)))
-                _selectedRoomIndex = Mathf.Min(Mathf.Max(0, roomCount - 1), _selectedRoomIndex + 1);
-            GUILayout.EndHorizontal();
-
-            if (GUILayout.Button("Teleport to Room")) TeleportToSelectedRoom();
-            if (GUILayout.Button("Reload Current Room")) ReloadCurrentRoom();
-        }
-
         GUILayout.EndVertical();
 
         GUILayout.Space(10);
 
-        GUILayout.BeginVertical();
+        // Fixed width so long lines (like the loaded scenes) wrap instead of pushing the panel wider
+        GUILayout.BeginVertical(GUILayout.Width(244));
 
         // HEALTH / STATE CONTROLS
         GUILayout.Label("--- Health / State Controls ---", info);
@@ -624,6 +587,57 @@ public class DevModeManager : MonoBehaviour
         GUILayout.EndHorizontal();
         if (GUILayout.Button("Unlock All Abilities")) UnlockAllAbilities();
 
+        GUILayout.Space(4); // space before world streaming
+
+        // WORLD STREAMING
+        // Live info from the WorldStreamer, plus room teleport and room reload
+        GUILayout.Label("--- World Streaming ---", info);
+        WorldStreamer streamer = WorldStreamer.Instance;
+        if (streamer == null)
+        {
+            GUILayout.Label("No WorldStreamer in scene", info);
+        }
+        else
+        {
+            string roomName = streamer.CurrentRoom != null ? streamer.CurrentRoom.RoomId : "(none)";
+            string biomeName = streamer.CurrentBiome.HasValue ? streamer.CurrentBiome.Value.ToString() : "(none)";
+
+            // Room and biome share one line to keep the section short
+            GUILayout.Label($"Room : {roomName}   |   Biome : {biomeName}", info);
+
+            // Every scene loaded right now, so you can watch rooms/biomes load and unload as you move
+            // Listed on one line (wrapping if it gets long) instead of one line per scene
+            var loadedSceneNames = new System.Collections.Generic.List<string>();
+            for (int i = 0; i < SceneManager.sceneCount; i++)
+            {
+                Scene loadedScene = SceneManager.GetSceneAt(i);
+                loadedSceneNames.Add($"{loadedScene.name}{(loadedScene.isLoaded ? "" : " (loading)")}");
+            }
+            GUILayout.Label($"Loaded : {string.Join(", ", loadedSceneNames)}", infoWrap);
+
+            // Arrow buttons cycle through the rooms in the WorldMap, same as the teleport presets
+            var roomIds = GetRoomIds();
+            int roomCount = roomIds != null ? roomIds.Count : 0;
+            _selectedRoomIndex = Mathf.Clamp(_selectedRoomIndex, 0, Mathf.Max(0, roomCount - 1));
+
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("<", GUILayout.Width(30)))
+                _selectedRoomIndex = Mathf.Max(0, _selectedRoomIndex - 1);
+
+            string roomLabel = roomCount > 0 ? $"Room: {roomIds[_selectedRoomIndex]}" : "No rooms in WorldMap";
+            GUILayout.Label(roomLabel, info);
+
+            if (GUILayout.Button(">", GUILayout.Width(30)))
+                _selectedRoomIndex = Mathf.Min(Mathf.Max(0, roomCount - 1), _selectedRoomIndex + 1);
+            GUILayout.EndHorizontal();
+
+            // Teleport and reload sit side by side to save a row
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("Teleport to Room")) TeleportToSelectedRoom();
+            if (GUILayout.Button("Reload Room")) ReloadCurrentRoom();
+            GUILayout.EndHorizontal();
+        }
+
         GUILayout.EndVertical();
         GUILayout.EndHorizontal();
 
@@ -632,6 +646,13 @@ public class DevModeManager : MonoBehaviour
         GUIStyle hint = new GUIStyle(GUI.skin.label) { fontSize = 10};
         hint.normal.textColor = Color.gray;
         GUILayout.Label("F6 hide panel | Shift+F1 toggle off", hint);
+
+        // Measure where the content ended so the background fits it on the next frame
+        // (layout sizes are only final during the Repaint event). +14 covers the gap above the area and some padding below
+        if (Event.current.type == EventType.Repaint)
+        {
+            _panelHeight = GUILayoutUtility.GetLastRect().yMax + 14f;
+        }
 
         GUILayout.EndArea();
     }
