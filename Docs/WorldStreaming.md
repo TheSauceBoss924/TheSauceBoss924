@@ -79,6 +79,18 @@ Right-click the asset's Inspector header and pick **Validate** to check for dupl
 - **The confiner's own Damping doesn't soften room switches** (it only smooths corners). `RoomTransitionSmoother` does; tune its Glide Time.
 - **Biome background scenes** need `BiomeBackground` on their root, an inactive `Content` child, no camera, and must be in the build scene list. Put the scene's name in the BiomeProfile's **Background Scene**.
 
+## Switching off far-away biomes (BiomeContent)
+
+While all rooms share one scene, gameplay objects in far-away biomes are switched off so they don't move, update, run physics or render.
+
+1. Per biome, create an empty object at the root of the scene at 0, 0, 0 (e.g. `Content_Fire`) with a child `Content`, also at 0, 0, 0 and left **ticked**.
+2. Add `BiomeContent` to the parent. Set **Biome**, and drag the `Content` child into **Content**.
+3. Put that biome's gameplay objects under `Content`: moving platforms, fans, switches, doors, enemies, hazards. Drag whole groups or prefab roots.
+4. Keep these **out** of every group: the Grid/tilemaps, room triggers, checkpoints, the player, camera, managers and UI.
+5. Keep linked objects (a switch and the door or fan it controls) in the same biome.
+
+A biome is on while the player is in it or in a room next to it (per the WorldMap neighbors). Switched-off objects keep their state. Scripts that use coroutines or one-off setup must restart them in `OnEnable` and clean up in `OnDisable`, because a coroutine stops when its object is switched off.
+
 ## Reacting to biome changes
 
 ```csharp
