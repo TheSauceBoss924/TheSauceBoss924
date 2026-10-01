@@ -4,7 +4,7 @@ using UnityEngine;
 // It includes the biome type, music, ambient light color, and background sprite.
 // This allows for easy customization and management of different biomes in the game.
 // If we need any extra properties for a biome, we can add them here. Anything that reacts to biome changes
-// (music, lighting, etc.) subscribes to WorldStreamer.OnBiomeChanged and reads WorldStreamer.Instance.CurrentBiomeProfile.
+// (music, lighting, etc.) subscribes to EventHandler.OnBiomeChanged and reads WorldStreamer.Instance.CurrentBiomeProfile.
 // (These are just placeholders for now, we can add more or change properties as needed.)
 // Every biome profile also needs to be added to the Biomes list on the WorldMap asset.
 

@@ -13,7 +13,7 @@ The layout of the world lives in one **`WorldMap`** asset. It lists every room's
 When the player walks into a room, `WorldStreamer`:
 - confines the camera to that room,
 - looks the room up in the `WorldMap`,
-- fires `WorldStreamer.OnBiomeChanged` if the biome changed, and shows that biome's background,
+- fires `EventHandler.OnBiomeChanged` if the biome changed, and shows that biome's background,
 - loads the room's neighbors and the current biome background, plus the hidden background of any neighbor in a different biome,
 - unloads every other room and biome scene that's in the map.
 
@@ -27,6 +27,8 @@ Walking between rooms needs no fade or door script. Neighbors are already loaded
 | `WorldStreamer` | Core | Picks the current room, sets the confiner, fires biome changes, loads and unloads scenes, `TeleportTo` for respawn, save loading and fast travel |
 | `RoomTrigger` | Each room | Replaces `RoomManager`. Reports when the player enters or leaves the room |
 | `BiomeBackground` | Root of each biome scene | Shows its content only while its biome is current |
+| `BiomeContent` | Level scene, one per biome | Switches that biome's gameplay objects (platforms, fans, enemies, hazards) on only while the player is in or next to the biome |
+| `ParallaxLayer` | Background layers and decorative props | Scrolls at a different speed than the level for depth |
 | `BiomeProfile` | Asset per biome | Now also holds `backgroundScene` |
 | `WorldBootstrap` | Editor only | Pressing Play in a room scene loads Core automatically |
 | `CameraTarget` | Core | `SnapToPlayer` now fully resets and cuts the camera after a teleport |
@@ -80,8 +82,8 @@ Right-click the asset's Inspector header and pick **Validate** to check for dupl
 ## Reacting to biome changes
 
 ```csharp
-void OnEnable()  => WorldStreamer.OnBiomeChanged += HandleBiomeChanged;
-void OnDisable() => WorldStreamer.OnBiomeChanged -= HandleBiomeChanged;
+void OnEnable()  => EventHandler.OnBiomeChanged += HandleBiomeChanged;
+void OnDisable() => EventHandler.OnBiomeChanged -= HandleBiomeChanged;
 
 void HandleBiomeChanged(BiomeType biome)
 {

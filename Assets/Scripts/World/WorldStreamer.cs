@@ -9,7 +9,8 @@ using Unity.Cinemachine;
 // It took over the job RoomManager used to do from every room, and adds scene streaming on top:
 //   - works out which room the player is in from the RoomTriggers they're overlapping
 //   - points the CinemachineConfiner2D at that room's bounds
-//   - fires OnBiomeChanged when the player crosses into a different biome
+//   - fires EventHandler.OnBiomeChanged when the player crosses into a different biome
+//   - switches each biome's gameplay objects (BiomeContent) on while the player is in or next to that biome, and off otherwise
 //   - keeps only what's needed loaded, using the WorldMap to know how rooms connect:
 //       * the current room's scene, plus the scenes of its neighbor rooms (so the player can walk straight
 //         into them, their triggers have to exist before the player gets there)
@@ -22,12 +23,6 @@ using Unity.Cinemachine;
 public class WorldStreamer : MonoBehaviour
 {
     public static WorldStreamer Instance { get; private set; }
-
-    // Fired only when a room transition also crosses a biome boundary.
-    // Listeners (music, lighting, background) subscribe to this rather than
-    // the streamer needing to know about any of them directly.
-    // It also fires once for the first room the player is placed in; anything subscribing later can read CurrentBiome.
-    public static event Action<BiomeType> OnBiomeChanged;
 
     [SerializeField] private WorldMap worldMap;
     [SerializeField] private CinemachineConfiner2D confiner;
@@ -50,6 +45,14 @@ public class WorldStreamer : MonoBehaviour
     // Room ids we've already warned about missing from the WorldMap, so the warning only shows once.
     private readonly HashSet<string> _unmappedRooms = new();
 
+    // Biomes whose gameplay objects (BiomeContent) are switched on: the current biome plus the biome of any neighboring room,
+    // so a neighboring biome is already running before the player crosses into it.
+    private readonly HashSet<BiomeType> _activeBiomes = new();
+    private readonly HashSet<BiomeType> _nextActiveBiomes = new();
+    public IReadOnlyCollection<BiomeType> ActiveBiomes => _activeBiomes;
+    // False until the player's first room is known. Until then BiomeContent leaves everything as it is in the scene.
+    public bool HasActiveBiomes { get; private set; }
+
     private string _teleportScene;
     private Coroutine _worker;
 
@@ -57,7 +60,6 @@ public class WorldStreamer : MonoBehaviour
     private static void ResetStatics()
     {
         Instance = null;
-        OnBiomeChanged = null;
     }
 
     private void Awake()
@@ -154,10 +156,15 @@ public class WorldStreamer : MonoBehaviour
         }
         if (!CanLoad(roomScene)) yield break;
 
-        _teleportScene = roomScene;
-        UpdateStreaming();
-        yield return new WaitUntil(() => IsLoaded(roomScene) || _invalidScenes.Contains(roomScene));
-        _teleportScene = null;
+        // Only wait when the room still has to load. If it's already loaded, everything below happens this same frame,
+        // which matters for respawning (the player shouldn't spend a frame still standing in the death zone)
+        if (!IsLoaded(roomScene))
+        {
+            _teleportScene = roomScene;
+            UpdateStreaming();
+            yield return new WaitUntil(() => IsLoaded(roomScene) || _invalidScenes.Contains(roomScene));
+            _teleportScene = null;
+        }
 
         RoomTrigger room = FindLoadedRoom(roomId);
         if (room == null)
@@ -185,6 +192,32 @@ public class WorldStreamer : MonoBehaviour
         }
 
         yield return new WaitUntil(() => _worker == null);
+    }
+
+    // Instantly moves the player to a position, e.g. respawning at a checkpoint (used by CheckpointManager.RespawnPlayer).
+    // Finds the room containing the position, so the camera bounds, biome, biome background and biome gameplay objects are
+    // all switched to that spot before the camera snaps. Happens in the same frame when the room is already loaded.
+    public void TeleportToPosition(Vector2 position, float facingDirection = 1f)
+    {
+        RoomTrigger room = FindLoadedRoomContaining(position);
+        if (room != null)
+        {
+            TeleportTo(room.RoomId, position, facingDirection);
+            return;
+        }
+
+        // Not inside any room: still move the player and snap the camera, and the room triggers take over from there
+        Debug.LogWarning($"Teleport position {position} isn't inside any loaded room.", this);
+        if (playerRb != null)
+        {
+            playerRb.transform.position = position;
+            playerRb.position = position;
+            playerRb.linearVelocity = Vector2.zero;
+        }
+        if (cameraTarget != null)
+        {
+            cameraTarget.SnapToPlayer(facingDirection);
+        }
     }
 
     // Testing helper (used by DevModeManager): unloads the room the player is in and loads it again, so its enemies
@@ -283,7 +316,7 @@ public class WorldStreamer : MonoBehaviour
         {
             CurrentBiome = CurrentRoomEntry.biome;
             BiomeBackground.ShowOnly(CurrentRoomEntry.biome);
-            OnBiomeChanged?.Invoke(CurrentRoomEntry.biome);
+            EventHandler.InvokeBiomeChanged(CurrentRoomEntry.biome);
         }
 
         UpdateStreaming();
@@ -311,11 +344,15 @@ public class WorldStreamer : MonoBehaviour
 
         AddBiomeBackground(CurrentRoomEntry.biome);
 
+        _nextActiveBiomes.Clear();
+        _nextActiveBiomes.Add(CurrentRoomEntry.biome);
+
         foreach (string neighborId in worldMap.GetNeighbors(CurrentRoomEntry.Id))
         {
             if (!worldMap.TryGetRoom(neighborId, out WorldMap.RoomEntry neighbor)) continue;
 
             AddDesired(neighbor.scene);
+            _nextActiveBiomes.Add(neighbor.biome);
 
             // Neighbor in a different biome: preload that biome's background (hidden) ahead of the border.
             if (neighbor.biome != CurrentRoomEntry.biome)
@@ -323,6 +360,19 @@ public class WorldStreamer : MonoBehaviour
                 AddBiomeBackground(neighbor.biome);
             }
         }
+
+        UpdateActiveBiomes();
+    }
+
+    // Switches BiomeContent groups on and off, only when the set of active biomes actually changes
+    private void UpdateActiveBiomes()
+    {
+        if (HasActiveBiomes && _activeBiomes.SetEquals(_nextActiveBiomes)) return;
+
+        _activeBiomes.Clear();
+        _activeBiomes.UnionWith(_nextActiveBiomes);
+        HasActiveBiomes = true;
+        BiomeContent.ApplyAll(_activeBiomes);
     }
 
     private void AddBiomeBackground(BiomeType biome)
@@ -421,6 +471,15 @@ public class WorldStreamer : MonoBehaviour
 
         RoomTrigger loaded = FindLoadedRoom(roomId);
         return loaded != null ? loaded.gameObject.scene.name : null;
+    }
+
+    private static RoomTrigger FindLoadedRoomContaining(Vector2 position)
+    {
+        foreach (RoomTrigger room in RoomTrigger.All)
+        {
+            if (room.Contains(position)) return room;
+        }
+        return null;
     }
 
     private static RoomTrigger FindLoadedRoom(string roomId)

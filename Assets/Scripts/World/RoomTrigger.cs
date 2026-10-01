@@ -35,6 +35,9 @@ public class RoomTrigger : MonoBehaviour
     public int EnterOrder { get; private set; }
     public Vector2 SpawnPosition => spawnPoint != null ? (Vector2)spawnPoint.position : (Vector2)roomBounds.bounds.center;
 
+    // True if a world position is inside this room's trigger shape (used to find the room a checkpoint is in)
+    public bool Contains(Vector2 point) => _trigger != null && _trigger.OverlapPoint(point);
+
     // Clears the statics when entering play mode with domain reload turned off (Enter Play Mode Options),
     // otherwise rooms from the last play session would still be in the list.
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
